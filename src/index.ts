@@ -692,22 +692,42 @@ function normalizeMessages(messages: any[]): any[] {
   });
 }
 
+function cleanParametersSchema(schema: any): any {
+  if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
+  const cleaned: any = Array.isArray(schema) ? [] : {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "additionalProperties") continue; // Strip additionalProperties for Workers AI C++ validator
+    if (key === "type" && Array.isArray(value)) {
+      // e.g. ["string", "null"] -> "string"
+      cleaned[key] = value.find((v) => v !== "null") || value[0] || "string";
+    } else if (typeof value === "object" && value !== null) {
+      cleaned[key] = cleanParametersSchema(value);
+    } else {
+      cleaned[key] = value;
+    }
+  }
+  if (!cleaned.type && !Array.isArray(cleaned)) {
+    cleaned.type = "object";
+  }
+  return cleaned;
+}
+
 function normalizeTools(tools: any): any[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return tools
     .map((t) => {
-      if (t.type === "function" && t.function) return t;
-      if (t.type === "function" && t.name) {
-        return {
-          type: "function",
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          },
-        };
-      }
-      return null;
+      let fn = t.function || (t.type === "function" ? t : null);
+      if (!fn && t.name) fn = t;
+      if (!fn || !fn.name) return null;
+
+      return {
+        type: "function",
+        function: {
+          name: fn.name,
+          description: fn.description || "",
+          parameters: cleanParametersSchema(fn.parameters),
+        },
+      };
     })
     .filter(Boolean);
 }
