@@ -563,18 +563,24 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
             )
           );
           if (content) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({
-                  type: "response.output_text.delta",
-                  response_id: responseId,
-                  item_id: itemId,
-                  output_index: 0,
-                  content_index: 0,
-                  delta: content,
-                })}\n\n`
-              )
-            );
+            // Stream tokens/words smoothly with real-time SSE deltas
+            const chunks = content.match(/[\s]+|[^\s]+/g) || [content];
+            for (const chunk of chunks) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: "response.output_text.delta",
+                    response_id: responseId,
+                    item_id: itemId,
+                    output_index: 0,
+                    content_index: 0,
+                    delta: chunk,
+                  })}\n\n`
+                )
+              );
+              // Brief 12ms micro-pause so the client renders word-by-word streaming
+              await new Promise((r) => setTimeout(r, 12));
+            }
           }
           controller.enqueue(
             encoder.encode(
