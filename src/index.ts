@@ -76,6 +76,13 @@ function verifyAuth(req: Request, env: Env): boolean {
   return token === env.AUTH_TOKEN.trim();
 }
 
+function resolveModelId(requested?: string, defaultModel?: string): string {
+  if (!requested) return defaultModel || DEFAULT_MODEL_ID;
+  if (requested.startsWith("@cf/")) return requested;
+  const match = SUPPORTED_MODELS.find((m) => m.id.includes(requested) || requested.includes(m.id));
+  return match?.id || defaultModel || DEFAULT_MODEL_ID;
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -152,19 +159,13 @@ export default {
 // ============================================================================
 
 async function handleChatCompletions(body: any, env: Env): Promise<Response> {
-  let model = body.model || env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
-  if (!model.startsWith("@cf/")) {
-    const match = SUPPORTED_MODELS.find((m) => m.id.includes(model) || model.includes(m.id));
-    model = match?.id || DEFAULT_MODEL_ID;
-  }
-
+  const model = resolveModelId(body.model, env.DEFAULT_MODEL);
   const messages = normalizeMessages(body.messages || []);
   const tools = normalizeTools(body.tools);
   const stream = Boolean(body.stream);
 
   const aiParams: any = {
     messages,
-    stream,
     max_tokens: body.max_tokens || 4096,
   };
   if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
@@ -172,7 +173,8 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
 
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
 
-  if (!stream) {
+  // If tools are provided, run non-streaming to guarantee clean tool call parsing
+  if (!stream || (tools && tools.length > 0)) {
     const res = (await env.AI.run(model as any, aiParams)) as any;
     const content = res?.response || res?.content || "";
     const toolCalls = res?.tool_calls || [];
@@ -187,7 +189,7 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
     };
 
     if (toolCalls.length > 0) {
-      choice.message.tool_calls = toolCalls.map((t: any, i: number) => ({
+      choice.message.tool_calls = toolCalls.map((t: any) => ({
         id: `call_${crypto.randomUUID().slice(0, 8)}`,
         type: "function",
         function: {
@@ -203,15 +205,12 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
       created: Math.floor(Date.now() / 1000),
       model,
       choices: [choice],
-      usage: {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      },
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     });
   }
 
-  // SSE Stream
+  // Pure text SSE Stream
+  aiParams.stream = true;
   const aiStream = (await env.AI.run(model as any, aiParams)) as ReadableStream<Uint8Array>;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -261,13 +260,12 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkObj)}\n\n`));
                 }
               } catch {
-                // Ignore chunk parse error
+                // Ignore parse error
               }
             }
           }
         }
 
-        // Final chunk
         const endChunk = {
           id: responseId,
           object: "chat.completion.chunk",
@@ -300,12 +298,7 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
 // ============================================================================
 
 async function handleResponses(body: any, env: Env): Promise<Response> {
-  let model = body.model || env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
-  if (!model.startsWith("@cf/")) {
-    const match = SUPPORTED_MODELS.find((m) => m.id.includes(model) || model.includes(m.id));
-    model = match?.id || DEFAULT_MODEL_ID;
-  }
-
+  const model = resolveModelId(body.model, env.DEFAULT_MODEL);
   const instructions = body.instructions || "";
   const input = body.input || [];
   const tools = normalizeTools(body.tools);
@@ -328,6 +321,21 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
         });
       } else if (item?.role) {
         messages.push({ role: item.role, content: extractMessageContent(item.content) });
+      } else if (item?.type === "function_call") {
+        messages.push({
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: item.call_id || `call_${crypto.randomUUID().slice(0, 8)}`,
+              type: "function",
+              function: {
+                name: item.name,
+                arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {}),
+              },
+            },
+          ],
+        });
       } else if (item?.type === "function_call_output") {
         messages.push({
           role: "tool",
@@ -340,7 +348,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
 
   const aiParams: any = {
     messages: normalizeMessages(messages),
-    stream,
     max_tokens: body.max_tokens || 4096,
   };
   if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
@@ -349,21 +356,25 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
   const responseId = `resp_${crypto.randomUUID().slice(0, 16)}`;
   const itemId = `msg_${crypto.randomUUID().slice(0, 16)}`;
 
-  if (!stream) {
-    const res = (await env.AI.run(model as any, aiParams)) as any;
-    const content = res?.response || res?.content || "";
-    const toolCalls = res?.tool_calls || [];
+  // When tools are present OR non-streaming, execute Workers AI directly
+  if (!stream || (tools && tools.length > 0)) {
+    const aiResult = (await env.AI.run(model as any, aiParams)) as any;
+    let content = aiResult?.response || aiResult?.content || "";
+    const toolCalls = aiResult?.tool_calls || [];
 
     const output: any[] = [];
 
     if (toolCalls && toolCalls.length > 0) {
       for (const t of toolCalls) {
+        const callId = `call_${crypto.randomUUID().slice(0, 8)}`;
+        const name = t.name || t.function?.name;
+        const args = typeof t.arguments === "string" ? t.arguments : JSON.stringify(t.arguments || {});
         output.push({
-          id: `call_${crypto.randomUUID().slice(0, 8)}`,
+          id: callId,
           type: "function_call",
-          name: t.name || t.function?.name,
-          arguments: typeof t.arguments === "string" ? t.arguments : JSON.stringify(t.arguments || {}),
-          call_id: `call_${crypto.randomUUID().slice(0, 8)}`,
+          call_id: callId,
+          name,
+          arguments: args,
         });
       }
     } else {
@@ -371,21 +382,157 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
         id: itemId,
         type: "message",
         role: "assistant",
+        status: "completed",
         content: [{ type: "text", text: content }],
       });
     }
 
-    return json({
-      id: responseId,
-      object: "response",
-      created_at: Math.floor(Date.now() / 1000),
-      status: "completed",
-      model,
-      output,
+    if (!stream) {
+      return json({
+        id: responseId,
+        object: "response",
+        created_at: Math.floor(Date.now() / 1000),
+        status: "completed",
+        model,
+        output,
+      });
+    }
+
+    // Stream SSE events for tool calls or immediate output
+    const encoder = new TextEncoder();
+    const immediateStream = new ReadableStream({
+      start(controller) {
+        // 1. response.created
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.created",
+              response: { id: responseId, object: "response", status: "in_progress", model },
+            })}\n\n`
+          )
+        );
+
+        if (toolCalls && toolCalls.length > 0) {
+          for (const o of output) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "response.output_item.added",
+                  response_id: responseId,
+                  output_index: 0,
+                  item: { id: o.id, type: "function_call", call_id: o.call_id, name: o.name, arguments: "" },
+                })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "response.function_call_arguments.delta",
+                  response_id: responseId,
+                  item_id: o.id,
+                  output_index: 0,
+                  call_id: o.call_id,
+                  delta: o.arguments,
+                })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "response.function_call_arguments.done",
+                  response_id: responseId,
+                  item_id: o.id,
+                  output_index: 0,
+                  call_id: o.call_id,
+                  arguments: o.arguments,
+                })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "response.output_item.done",
+                  response_id: responseId,
+                  output_index: 0,
+                  item: o,
+                })}\n\n`
+              )
+            );
+          }
+        } else {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "response.output_item.added",
+                response_id: responseId,
+                output_index: 0,
+                item: { id: itemId, type: "message", role: "assistant", content: [] },
+              })}\n\n`
+            )
+          );
+          if (content) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: "response.output_text.delta",
+                  response_id: responseId,
+                  item_id: itemId,
+                  output_index: 0,
+                  content_index: 0,
+                  delta: content,
+                })}\n\n`
+              )
+            );
+          }
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "response.output_item.done",
+                response_id: responseId,
+                output_index: 0,
+                item: {
+                  id: itemId,
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "text", text: content }],
+                },
+              })}\n\n`
+            )
+          );
+        }
+
+        // Final response.completed
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.completed",
+              response: {
+                id: responseId,
+                object: "response",
+                status: "completed",
+                model,
+                output,
+              },
+            })}\n\n`
+          )
+        );
+        controller.close();
+      },
+    });
+
+    return new Response(immediateStream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        ...CORS_HEADERS,
+      },
     });
   }
 
-  // SSE Stream for Responses API
+  // Pure text token-by-token streaming
+  aiParams.stream = true;
   const aiStream = (await env.AI.run(model as any, aiParams)) as ReadableStream<Uint8Array>;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -397,7 +544,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
       let fullContent = "";
 
       try {
-        // 1. response.created
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -407,7 +553,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
           )
         );
 
-        // 2. output_item.added
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -440,7 +585,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
                 const chunkText = parsed.response || parsed.content || "";
                 if (chunkText) {
                   fullContent += chunkText;
-                  // response.output_text.delta
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({
@@ -461,7 +605,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
           }
         }
 
-        // 3. response.output_item.done
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -479,7 +622,6 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
           )
         );
 
-        // 4. response.completed
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -540,10 +682,13 @@ function normalizeMessages(messages: any[]): any[] {
     let content = "";
     if (typeof m.content === "string") content = m.content;
     else if (Array.isArray(m.content)) content = extractMessageContent(m.content);
-    return {
+    const item: any = {
       role: m.role || "user",
       content,
     };
+    if (m.tool_calls) item.tool_calls = m.tool_calls;
+    if (m.name) item.name = m.name;
+    return item;
   });
 }
 
