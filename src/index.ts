@@ -16,36 +16,128 @@ export interface ModelInfo {
   description: string;
   context_length: number;
   parameters: string;
+  category: "general" | "coding" | "vision" | "fast";
 }
 
 export const SUPPORTED_MODELS: ModelInfo[] = [
+  // ── General Chat & Reasoning (Flagship) ──
   {
     id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     name: "Llama 3.3 70B Instruct (Fast FP8)",
     description: "Flagship 70B model running on high-speed FP8 edge GPU hardware",
     context_length: 131072,
     parameters: "70B",
+    category: "general",
   },
   {
     id: "@cf/qwen/qwen2.5-72b-instruct",
     name: "Qwen 2.5 72B Instruct",
-    description: "Advanced 72B reasoning and coding model with high precision",
+    description: "Advanced 72B reasoning and structured thinking with high precision",
     context_length: 32768,
     parameters: "72B",
+    category: "general",
   },
   {
     id: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
     name: "DeepSeek R1 Distill Qwen 32B",
-    description: "DeepSeek R1 reasoning architecture distilled into 32B",
+    description: "DeepSeek R1 chain-of-thought reasoning architecture distilled into 32B",
     context_length: 131072,
     parameters: "32B",
+    category: "general",
+  },
+  {
+    id: "@cf/meta/llama-3.1-70b-instruct",
+    name: "Llama 3.1 70B Instruct",
+    description: "High-intelligence 70B general knowledge and complex instruction following",
+    context_length: 131072,
+    parameters: "70B",
+    category: "general",
   },
   {
     id: "@cf/meta/llama-3.1-8b-instruct",
     name: "Llama 3.1 8B Instruct",
-    description: "Ultra-fast low-latency 8B model for quick actions and reviews",
+    description: "Capable 8B model with wide knowledge base and low edge latency",
     context_length: 131072,
     parameters: "8B",
+    category: "general",
+  },
+
+  // ── Coding & Technical ──
+  {
+    id: "@cf/qwen/qwen2.5-coder-32b-instruct",
+    name: "Qwen 2.5 Coder 32B Instruct",
+    description: "Premier open-source code generation, debugging, and multi-file architecture",
+    context_length: 32768,
+    parameters: "32B",
+    category: "coding",
+  },
+  {
+    id: "@cf/deepseek-ai/deepseek-coder-6.7b-instruct",
+    name: "DeepSeek Coder 6.7B Instruct",
+    description: "Fast, specialized code completion, syntax analysis, and scripting",
+    context_length: 16384,
+    parameters: "6.7B",
+    category: "coding",
+  },
+  {
+    id: "@cf/defog/sqlcoder-7b-2",
+    name: "SQLCoder 7B-2",
+    description: "State-of-the-art text-to-SQL generation and database query optimization",
+    context_length: 8192,
+    parameters: "7B",
+    category: "coding",
+  },
+
+  // ── Vision & Multimodal ──
+  {
+    id: "@cf/meta/llama-3.2-11b-vision-instruct",
+    name: "Llama 3.2 11B Vision Instruct",
+    description: "Multimodal text and image understanding, document and UI inspection",
+    context_length: 131072,
+    parameters: "11B Vision",
+    category: "vision",
+  },
+  {
+    id: "@cf/meta/llama-3.2-90b-vision-instruct",
+    name: "Llama 3.2 90B Vision Instruct",
+    description: "High-resolution multimodal visual reasoning and detailed image comprehension",
+    context_length: 131072,
+    parameters: "90B Vision",
+    category: "vision",
+  },
+
+  // ── Fast & Automation ──
+  {
+    id: "@cf/meta/llama-3.2-3b-instruct",
+    name: "Llama 3.2 3B Instruct",
+    description: "Ultra-fast low-latency agent execution and routine tasks",
+    context_length: 131072,
+    parameters: "3B",
+    category: "fast",
+  },
+  {
+    id: "@cf/meta/llama-3.2-1b-instruct",
+    name: "Llama 3.2 1B Instruct",
+    description: "Instant sub-second edge response for quick status checks and summaries",
+    context_length: 131072,
+    parameters: "1B",
+    category: "fast",
+  },
+  {
+    id: "@cf/mistral/mistral-7b-instruct-v0.2",
+    name: "Mistral 7B Instruct v0.2",
+    description: "Reliable, high-throughput lightweight general reasoning",
+    context_length: 32768,
+    parameters: "7B",
+    category: "fast",
+  },
+  {
+    id: "@cf/google/gemma-2-9b-it",
+    name: "Google Gemma 2 9B IT",
+    description: "Google's efficient 9B instruction-tuned model built on Gemini tech",
+    context_length: 8192,
+    parameters: "9B",
+    category: "fast",
   },
 ];
 
