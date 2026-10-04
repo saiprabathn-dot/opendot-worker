@@ -1,0 +1,568 @@
+/**
+ * OpenDot AI Worker - Cloudflare Workers AI Proxy
+ * Provides OpenAI-compatible /v1/chat/completions, /v1/responses, and /v1/models
+ * powered directly by Cloudflare Workers AI with 0 latency bottlenecks and 0 rate limits.
+ */
+
+export interface Env {
+  AI: Ai;
+  AUTH_TOKEN?: string;
+  DEFAULT_MODEL?: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  context_length: number;
+  parameters: string;
+}
+
+export const SUPPORTED_MODELS: ModelInfo[] = [
+  {
+    id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    name: "Llama 3.3 70B Instruct (Fast FP8)",
+    description: "Flagship 70B model running on high-speed FP8 edge GPU hardware",
+    context_length: 131072,
+    parameters: "70B",
+  },
+  {
+    id: "@cf/qwen/qwen2.5-72b-instruct",
+    name: "Qwen 2.5 72B Instruct",
+    description: "Advanced 72B reasoning and coding model with high precision",
+    context_length: 32768,
+    parameters: "72B",
+  },
+  {
+    id: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    name: "DeepSeek R1 Distill Qwen 32B",
+    description: "DeepSeek R1 reasoning architecture distilled into 32B",
+    context_length: 131072,
+    parameters: "32B",
+  },
+  {
+    id: "@cf/meta/llama-3.1-8b-instruct",
+    name: "Llama 3.1 8B Instruct",
+    description: "Ultra-fast low-latency 8B model for quick actions and reviews",
+    context_length: 131072,
+    parameters: "8B",
+  },
+];
+
+const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+  "Access-Control-Max-Age": "86400",
+};
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+  });
+}
+
+function errorJson(message: string, status = 400, type = "invalid_request_error"): Response {
+  return json({ error: { message, type, code: status } }, status);
+}
+
+function verifyAuth(req: Request, env: Env): boolean {
+  if (!env.AUTH_TOKEN) return true;
+  const auth = req.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : auth.trim();
+  return token === env.AUTH_TOKEN.trim();
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    // Health check & Info
+    if (url.pathname === "/" || url.pathname === "/health") {
+      return json({
+        service: "opendot-worker",
+        status: "healthy",
+        models: SUPPORTED_MODELS.length,
+        default_model: env.DEFAULT_MODEL || DEFAULT_MODEL_ID,
+      });
+    }
+
+    // Key verification endpoint
+    if (url.pathname === "/v1/key" || url.pathname === "/v1/auth") {
+      if (!verifyAuth(req, env)) {
+        return errorJson("Invalid token", 401, "authentication_error");
+      }
+      return json({ valid: true, service: "opendot-worker" });
+    }
+
+    // Auth check for all /v1 endpoints
+    if (!verifyAuth(req, env)) {
+      return errorJson("Unauthorized: Invalid Bearer token", 401, "authentication_error");
+    }
+
+    // GET /v1/models
+    if (url.pathname === "/v1/models" && req.method === "GET") {
+      const data = SUPPORTED_MODELS.map((m) => ({
+        id: m.id,
+        object: "model",
+        created: 1700000000,
+        owned_by: "cloudflare",
+        name: m.name,
+        description: m.description,
+        context_length: m.context_length,
+        parameters: m.parameters,
+        supported_parameters: ["tools", "stream", "temperature", "max_tokens"],
+      }));
+      return json({ object: "list", data });
+    }
+
+    // POST /v1/chat/completions
+    if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as any;
+        return await handleChatCompletions(body, env);
+      } catch (err: any) {
+        return errorJson(err?.message || "Failed to process chat completion", 500);
+      }
+    }
+
+    // POST /v1/responses (OpenAI beta Responses API format used by OpenDot)
+    if (url.pathname === "/v1/responses" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as any;
+        return await handleResponses(body, env);
+      } catch (err: any) {
+        return errorJson(err?.message || "Failed to process response", 500);
+      }
+    }
+
+    return errorJson(`Not Found: ${url.pathname}`, 404);
+  },
+};
+
+// ============================================================================
+// CHAT COMPLETIONS HANDLER
+// ============================================================================
+
+async function handleChatCompletions(body: any, env: Env): Promise<Response> {
+  let model = body.model || env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
+  if (!model.startsWith("@cf/")) {
+    const match = SUPPORTED_MODELS.find((m) => m.id.includes(model) || model.includes(m.id));
+    model = match?.id || DEFAULT_MODEL_ID;
+  }
+
+  const messages = normalizeMessages(body.messages || []);
+  const tools = normalizeTools(body.tools);
+  const stream = Boolean(body.stream);
+
+  const aiParams: any = {
+    messages,
+    stream,
+    max_tokens: body.max_tokens || 4096,
+  };
+  if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
+  if (tools && tools.length > 0) aiParams.tools = tools;
+
+  const responseId = `chatcmpl-${crypto.randomUUID()}`;
+
+  if (!stream) {
+    const res = (await env.AI.run(model as any, aiParams)) as any;
+    const content = res?.response || res?.content || "";
+    const toolCalls = res?.tool_calls || [];
+
+    const choice: any = {
+      index: 0,
+      message: {
+        role: "assistant",
+        content: content || null,
+      },
+      finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
+    };
+
+    if (toolCalls.length > 0) {
+      choice.message.tool_calls = toolCalls.map((t: any, i: number) => ({
+        id: `call_${crypto.randomUUID().slice(0, 8)}`,
+        type: "function",
+        function: {
+          name: t.name || t.function?.name,
+          arguments: typeof t.arguments === "string" ? t.arguments : JSON.stringify(t.arguments || {}),
+        },
+      }));
+    }
+
+    return json({
+      id: responseId,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [choice],
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      },
+    });
+  }
+
+  // SSE Stream
+  const aiStream = (await env.AI.run(model as any, aiParams)) as ReadableStream<Uint8Array>;
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const transformedStream = new ReadableStream({
+    async start(controller) {
+      const reader = aiStream.getReader();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(":")) continue;
+
+            if (trimmed.startsWith("data:")) {
+              const rawData = trimmed.slice(5).trim();
+              if (rawData === "[DONE]") {
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                continue;
+              }
+
+              try {
+                const parsed = JSON.parse(rawData);
+                const chunkText = parsed.response || parsed.content || "";
+                if (chunkText) {
+                  const chunkObj = {
+                    id: responseId,
+                    object: "chat.completion.chunk",
+                    created: Math.floor(Date.now() / 1000),
+                    model,
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { content: chunkText },
+                        finish_reason: null,
+                      },
+                    ],
+                  };
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkObj)}\n\n`));
+                }
+              } catch {
+                // Ignore chunk parse error
+              }
+            }
+          }
+        }
+
+        // Final chunk
+        const endChunk = {
+          id: responseId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(endChunk)}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      } catch (err: any) {
+        controller.error(err);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(transformedStream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+// ============================================================================
+// OPENAI RESPONSES API HANDLER (For OpenDot)
+// ============================================================================
+
+async function handleResponses(body: any, env: Env): Promise<Response> {
+  let model = body.model || env.DEFAULT_MODEL || DEFAULT_MODEL_ID;
+  if (!model.startsWith("@cf/")) {
+    const match = SUPPORTED_MODELS.find((m) => m.id.includes(model) || model.includes(m.id));
+    model = match?.id || DEFAULT_MODEL_ID;
+  }
+
+  const instructions = body.instructions || "";
+  const input = body.input || [];
+  const tools = normalizeTools(body.tools);
+  const stream = Boolean(body.stream);
+
+  const messages: any[] = [];
+  if (instructions) {
+    messages.push({ role: "system", content: instructions });
+  }
+
+  // Convert Responses input items to messages
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (typeof item === "string") {
+        messages.push({ role: "user", content: item });
+      } else if (item?.type === "message") {
+        messages.push({
+          role: item.role === "assistant" ? "assistant" : item.role === "system" ? "system" : "user",
+          content: extractMessageContent(item.content),
+        });
+      } else if (item?.role) {
+        messages.push({ role: item.role, content: extractMessageContent(item.content) });
+      } else if (item?.type === "function_call_output") {
+        messages.push({
+          role: "tool",
+          name: item.call_id || "function_result",
+          content: typeof item.output === "string" ? item.output : JSON.stringify(item.output || {}),
+        });
+      }
+    }
+  }
+
+  const aiParams: any = {
+    messages: normalizeMessages(messages),
+    stream,
+    max_tokens: body.max_tokens || 4096,
+  };
+  if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
+  if (tools && tools.length > 0) aiParams.tools = tools;
+
+  const responseId = `resp_${crypto.randomUUID().slice(0, 16)}`;
+  const itemId = `msg_${crypto.randomUUID().slice(0, 16)}`;
+
+  if (!stream) {
+    const res = (await env.AI.run(model as any, aiParams)) as any;
+    const content = res?.response || res?.content || "";
+    const toolCalls = res?.tool_calls || [];
+
+    const output: any[] = [];
+
+    if (toolCalls && toolCalls.length > 0) {
+      for (const t of toolCalls) {
+        output.push({
+          id: `call_${crypto.randomUUID().slice(0, 8)}`,
+          type: "function_call",
+          name: t.name || t.function?.name,
+          arguments: typeof t.arguments === "string" ? t.arguments : JSON.stringify(t.arguments || {}),
+          call_id: `call_${crypto.randomUUID().slice(0, 8)}`,
+        });
+      }
+    } else {
+      output.push({
+        id: itemId,
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: content }],
+      });
+    }
+
+    return json({
+      id: responseId,
+      object: "response",
+      created_at: Math.floor(Date.now() / 1000),
+      status: "completed",
+      model,
+      output,
+    });
+  }
+
+  // SSE Stream for Responses API
+  const aiStream = (await env.AI.run(model as any, aiParams)) as ReadableStream<Uint8Array>;
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const transformedStream = new ReadableStream({
+    async start(controller) {
+      const reader = aiStream.getReader();
+      let buffer = "";
+      let fullContent = "";
+
+      try {
+        // 1. response.created
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.created",
+              response: { id: responseId, object: "response", status: "in_progress", model },
+            })}\n\n`
+          )
+        );
+
+        // 2. output_item.added
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.output_item.added",
+              response_id: responseId,
+              output_index: 0,
+              item: { id: itemId, type: "message", role: "assistant", content: [] },
+            })}\n\n`
+          )
+        );
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(":")) continue;
+
+            if (trimmed.startsWith("data:")) {
+              const rawData = trimmed.slice(5).trim();
+              if (rawData === "[DONE]") continue;
+
+              try {
+                const parsed = JSON.parse(rawData);
+                const chunkText = parsed.response || parsed.content || "";
+                if (chunkText) {
+                  fullContent += chunkText;
+                  // response.output_text.delta
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({
+                        type: "response.output_text.delta",
+                        response_id: responseId,
+                        item_id: itemId,
+                        output_index: 0,
+                        content_index: 0,
+                        delta: chunkText,
+                      })}\n\n`
+                    )
+                  );
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+
+        // 3. response.output_item.done
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.output_item.done",
+              response_id: responseId,
+              output_index: 0,
+              item: {
+                id: itemId,
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [{ type: "text", text: fullContent }],
+              },
+            })}\n\n`
+          )
+        );
+
+        // 4. response.completed
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "response.completed",
+              response: {
+                id: responseId,
+                object: "response",
+                status: "completed",
+                model,
+                output: [
+                  {
+                    id: itemId,
+                    type: "message",
+                    role: "assistant",
+                    status: "completed",
+                    content: [{ type: "text", text: fullContent }],
+                  },
+                ],
+              },
+            })}\n\n`
+          )
+        );
+      } catch (err: any) {
+        controller.error(err);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(transformedStream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+function extractMessageContent(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c) => (typeof c === "string" ? c : c.text || c.content || ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function normalizeMessages(messages: any[]): any[] {
+  return messages.map((m) => {
+    let content = "";
+    if (typeof m.content === "string") content = m.content;
+    else if (Array.isArray(m.content)) content = extractMessageContent(m.content);
+    return {
+      role: m.role || "user",
+      content,
+    };
+  });
+}
+
+function normalizeTools(tools: any): any[] | undefined {
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  return tools
+    .map((t) => {
+      if (t.type === "function" && t.function) return t;
+      if (t.type === "function" && t.name) {
+        return {
+          type: "function",
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          },
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
