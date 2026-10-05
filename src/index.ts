@@ -493,7 +493,7 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
     // Stream SSE events for tool calls or immediate output
     const encoder = new TextEncoder();
     const immediateStream = new ReadableStream({
-      start(controller) {
+      async start(controller) {
         // 1. response.created
         controller.enqueue(
           encoder.encode(
@@ -563,9 +563,9 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
             )
           );
           if (content) {
-            // Stream tokens/words smoothly with real-time SSE deltas
-            const chunks = content.match(/[\s]+|[^\s]+/g) || [content];
-            for (const chunk of chunks) {
+            // Stream tokens with natural, fluid typewriter cadence
+            const tokens = content.match(/\S+\s*/g) || [content];
+            for (const token of tokens) {
               controller.enqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({
@@ -574,12 +574,13 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
                     item_id: itemId,
                     output_index: 0,
                     content_index: 0,
-                    delta: chunk,
+                    delta: token,
                   })}\n\n`
                 )
               );
-              // Brief 12ms micro-pause so the client renders word-by-word streaming
-              await new Promise((r) => setTimeout(r, 12));
+              // Cadence: 45ms pause on sentence stops (.!?\n), 30ms on pauses (,:;), 20ms on words
+              const delay = /[.!?\n]$/.test(token.trim()) ? 45 : /[,;:]$/.test(token.trim()) ? 30 : 20;
+              await new Promise((r) => setTimeout(r, delay));
             }
           }
           controller.enqueue(
