@@ -20,13 +20,37 @@ export interface ModelInfo {
 }
 
 export const SUPPORTED_MODELS: ModelInfo[] = [
-  // ── General Chat & Reasoning (Flagship) ──
+  // ── General Chat & Flagship Reasoning ──
   {
     id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     name: "Llama 3.3 70B Instruct (Fast FP8)",
     description: "Flagship 70B model running on high-speed FP8 edge GPU hardware",
     context_length: 131072,
     parameters: "70B",
+    category: "general",
+  },
+  {
+    id: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    name: "Meta Llama 4 Scout 17B (16E MoE)",
+    description: "Meta's flagship multimodal mixture-of-experts model for text, vision, and agentic workflows",
+    context_length: 131072,
+    parameters: "17B MoE",
+    category: "general",
+  },
+  {
+    id: "@cf/qwen/qwq-32b",
+    name: "QwQ 32B Reasoning",
+    description: "Alibaba's advanced thinking and reasoning model competing with DeepSeek-R1 and o1-mini",
+    context_length: 32768,
+    parameters: "32B",
+    category: "general",
+  },
+  {
+    id: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    name: "DeepSeek R1 Distill Qwen 32B",
+    description: "DeepSeek R1 chain-of-thought reasoning architecture distilled into 32B",
+    context_length: 131072,
+    parameters: "32B",
     category: "general",
   },
   {
@@ -38,11 +62,51 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
     category: "general",
   },
   {
-    id: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-    name: "DeepSeek R1 Distill Qwen 32B",
-    description: "DeepSeek R1 chain-of-thought reasoning architecture distilled into 32B",
+    id: "@cf/nvidia/nemotron-3-120b-a12b",
+    name: "NVIDIA Nemotron 3 Super 120B",
+    description: "NVIDIA's hybrid MoE flagship with leading accuracy for multi-agent applications",
+    context_length: 262144,
+    parameters: "120B",
+    category: "general",
+  },
+  {
+    id: "@cf/openai/gpt-oss-120b",
+    name: "OpenAI GPT-OSS 120B",
+    description: "OpenAI's open-weight model designed for production reasoning and agentic tasks",
     context_length: 131072,
-    parameters: "32B",
+    parameters: "120B",
+    category: "general",
+  },
+  {
+    id: "@cf/qwen/qwen3.8-27b",
+    name: "Qwen 3.8 27B Agentic",
+    description: "Alibaba's 27B instruction-tuned model designed for vision, text generation, and agentic workloads",
+    context_length: 131072,
+    parameters: "27B",
+    category: "general",
+  },
+  {
+    id: "@cf/qwen/qwen3-30b-a3b-fp8",
+    name: "Qwen 3 30B FP8 (MoE)",
+    description: "Next-gen MoE model with groundbreaking reasoning, agent capabilities, and multilingual support",
+    context_length: 32768,
+    parameters: "30B MoE",
+    category: "general",
+  },
+  {
+    id: "@cf/moonshotai/kimi-k2.6",
+    name: "Kimi K2.6 (1T MoE Agentic)",
+    description: "Frontier-scale 1T parameter model with 262k context and multi-turn tool calling",
+    context_length: 262144,
+    parameters: "1T MoE",
+    category: "general",
+  },
+  {
+    id: "@cf/zai-org/glm-5.3-flash",
+    name: "GLM 5.3 Flash (320B MoE)",
+    description: "Natively multimodal 320B model (18B active) approaching frontier intelligence at high speed",
+    context_length: 131072,
+    parameters: "320B MoE",
     category: "general",
   },
   {
@@ -72,6 +136,22 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
     category: "coding",
   },
   {
+    id: "@cf/zai-org/glm-5.3",
+    name: "GLM 5.3 Agentic Coder (1M ctx)",
+    description: "Flagship agentic coding model with 1M context window and tool-driven development workflows",
+    context_length: 1048576,
+    parameters: "Coding 1M",
+    category: "coding",
+  },
+  {
+    id: "@cf/moonshotai/kimi-k2.7-code",
+    name: "Kimi K2.7 Code (1T MoE)",
+    description: "Frontier-scale 1T MoE model with 262k context, structured outputs, and coding excellence",
+    context_length: 262144,
+    parameters: "1T Coder",
+    category: "coding",
+  },
+  {
     id: "@cf/deepseek-ai/deepseek-coder-6.7b-instruct",
     name: "DeepSeek Coder 6.7B Instruct",
     description: "Fast, specialized code completion, syntax analysis, and scripting",
@@ -90,6 +170,14 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
 
   // ── Vision & Multimodal ──
   {
+    id: "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    name: "Mistral Small 3.1 24B (Vision 128k)",
+    description: "State-of-the-art vision understanding and 128k context without compromising text speed",
+    context_length: 131072,
+    parameters: "24B Vision",
+    category: "vision",
+  },
+  {
     id: "@cf/meta/llama-3.2-11b-vision-instruct",
     name: "Llama 3.2 11B Vision Instruct",
     description: "Multimodal text and image understanding, document and UI inspection",
@@ -105,8 +193,16 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
     parameters: "90B Vision",
     category: "vision",
   },
+  {
+    id: "@cf/moondream/moondream3.1-9B-A2B",
+    name: "Moondream 3.1 9B Vision",
+    description: "Fast, efficient 9B MoE vision language model for OCR, UI pointing, and object detection",
+    context_length: 32768,
+    parameters: "9B Vision",
+    category: "vision",
+  },
 
-  // ── Fast & Automation ──
+  // ── Fast, Light & High-Throughput ──
   {
     id: "@cf/meta/llama-3.2-3b-instruct",
     name: "Llama 3.2 3B Instruct",
@@ -121,6 +217,38 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
     description: "Instant sub-second edge response for quick status checks and summaries",
     context_length: 131072,
     parameters: "1B",
+    category: "fast",
+  },
+  {
+    id: "@cf/meta/llama-3.1-8b-instruct-fp8",
+    name: "Llama 3.1 8B (Fast FP8)",
+    description: "Llama 3.1 8B quantized to FP8 precision for ultra-low latency edge responses",
+    context_length: 131072,
+    parameters: "8B FP8",
+    category: "fast",
+  },
+  {
+    id: "@cf/openai/gpt-oss-20b",
+    name: "OpenAI GPT-OSS 20B",
+    description: "OpenAI's open-weight model for lower latency and efficient developer workflows",
+    context_length: 65536,
+    parameters: "20B",
+    category: "fast",
+  },
+  {
+    id: "@cf/zai-org/glm-4.7-flash",
+    name: "GLM 4.7 Flash (128k ctx)",
+    description: "Fast multilingual model with 131k context window and multi-turn tool calling",
+    context_length: 131072,
+    parameters: "Flash 128k",
+    category: "fast",
+  },
+  {
+    id: "@cf/ibm-granite/granite-4.0-h-micro",
+    name: "IBM Granite 4.0 Micro",
+    description: "Efficient agentic model built for tool calling, instruction following, and RAG",
+    context_length: 32768,
+    parameters: "Micro",
     category: "fast",
   },
   {
