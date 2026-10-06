@@ -20,29 +20,13 @@ export interface ModelInfo {
 }
 
 export const SUPPORTED_MODELS: ModelInfo[] = [
-  // ── General Chat & Flagship Reasoning ──
-  {
-    id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    name: "Llama 3.3 70B Instruct (Fast FP8)",
-    description: "Meta's flagship 70B model running on high-speed FP8 edge GPU hardware",
-    context_length: 131072,
-    parameters: "70B",
-    category: "general",
-  },
+  // ── Flagship Reasoning & Multimodal Agent ──
   {
     id: "@cf/meta/llama-4-scout-17b-16e-instruct",
     name: "Meta Llama 4 Scout 17B (16E MoE)",
     description: "Meta's flagship multimodal mixture-of-experts model for text, vision, and agentic workflows",
     context_length: 131072,
     parameters: "17B MoE",
-    category: "general",
-  },
-  {
-    id: "@cf/qwen/qwq-32b",
-    name: "QwQ 32B Reasoning",
-    description: "Alibaba's advanced thinking and reasoning model competing with DeepSeek-R1 and o1-mini",
-    context_length: 32768,
-    parameters: "32B",
     category: "general",
   },
   {
@@ -54,11 +38,11 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
     category: "general",
   },
   {
-    id: "@cf/meta/llama-3.1-70b-instruct",
-    name: "Llama 3.1 70B Instruct",
-    description: "High-intelligence 70B general knowledge and complex instruction following",
-    context_length: 131072,
-    parameters: "70B",
+    id: "@cf/qwen/qwq-32b",
+    name: "QwQ 32B Reasoning",
+    description: "Alibaba's advanced thinking and reasoning model competing with DeepSeek-R1 and o1-mini",
+    context_length: 32768,
+    parameters: "32B",
     category: "general",
   },
 
@@ -117,7 +101,7 @@ export const SUPPORTED_MODELS: ModelInfo[] = [
   },
 ];
 
-const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_MODEL_ID = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
