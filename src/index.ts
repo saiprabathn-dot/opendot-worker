@@ -212,14 +212,18 @@ export default {
 
 async function handleChatCompletions(body: any, env: Env): Promise<Response> {
   const model = resolveModelId(body.model, env.DEFAULT_MODEL);
-  const messages = normalizeMessages(body.messages || []);
+  const { normalizedMessages, images } = processMessagesAndExtractImages(body.messages || []);
   const tools = normalizeTools(body.tools);
   const stream = Boolean(body.stream);
 
   const aiParams: any = {
-    messages,
+    messages: normalizedMessages,
     max_tokens: body.max_tokens || 4096,
   };
+  if (images.length > 0) {
+    if (images[0].bytes) aiParams.image = images[0].bytes;
+    else aiParams.image = images[0].url;
+  }
   if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
   if (tools && tools.length > 0) aiParams.tools = tools;
 
@@ -372,10 +376,10 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
       } else if (item?.type === "message") {
         messages.push({
           role: item.role === "assistant" ? "assistant" : item.role === "system" ? "system" : "user",
-          content: extractMessageContent(item.content),
+          content: item.content,
         });
       } else if (item?.role) {
-        messages.push({ role: item.role, content: extractMessageContent(item.content) });
+        messages.push({ role: item.role, content: item.content });
       } else if (item?.type === "function_call") {
         messages.push({
           role: "assistant",
@@ -401,10 +405,16 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
     }
   }
 
+  const { normalizedMessages, images } = processMessagesAndExtractImages(messages);
+
   const aiParams: any = {
-    messages: normalizeMessages(messages),
+    messages: normalizedMessages,
     max_tokens: body.max_tokens || 4096,
   };
+  if (images.length > 0) {
+    if (images[0].bytes) aiParams.image = images[0].bytes;
+    else aiParams.image = images[0].url;
+  }
   if (typeof body.temperature === "number") aiParams.temperature = body.temperature;
   if (tools && tools.length > 0) aiParams.tools = tools;
 
@@ -723,22 +733,69 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
 // HELPERS
 // ============================================================================
 
-function extractMessageContent(content: any): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => (typeof c === "string" ? c : c.text || c.content || ""))
-      .filter(Boolean)
-      .join("\n");
+function extractImageBytes(urlOrData: string): number[] | null {
+  if (!urlOrData || typeof urlOrData !== "string") return null;
+  const comma = urlOrData.indexOf(",");
+  const b64 = comma !== -1 ? urlOrData.slice(comma + 1) : urlOrData;
+  try {
+    const binStr = atob(b64);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    return [...bytes];
+  } catch {
+    return null;
   }
-  return "";
 }
 
-function normalizeMessages(messages: any[]): any[] {
-  return messages.map((m) => {
-    let content = "";
-    if (typeof m.content === "string") content = m.content;
-    else if (Array.isArray(m.content)) content = extractMessageContent(m.content);
+function processMessagesAndExtractImages(messages: any[]): {
+  normalizedMessages: any[];
+  images: { url: string; bytes: number[] | null }[];
+} {
+  const images: { url: string; bytes: number[] | null }[] = [];
+
+  const normalizedMessages = messages.map((m) => {
+    let content = m.content;
+
+    if (Array.isArray(content)) {
+      const parts: any[] = [];
+      const textPieces: string[] = [];
+
+      for (const part of content) {
+        if (typeof part === "string") {
+          parts.push({ type: "text", text: part });
+          textPieces.push(part);
+          continue;
+        }
+        if (!part || typeof part !== "object") continue;
+
+        // Image part detection
+        let imgUrl = "";
+        if (typeof part.image_url === "string") imgUrl = part.image_url;
+        else if (part.image_url && typeof part.image_url.url === "string") imgUrl = part.image_url.url;
+        else if (typeof part.image === "string") imgUrl = part.image;
+
+        if (imgUrl) {
+          const bytes = extractImageBytes(imgUrl);
+          images.push({ url: imgUrl, bytes });
+          parts.push({ type: "image_url", image_url: { url: imgUrl } });
+          continue;
+        }
+
+        // Text part
+        const txt = part.text || part.content || "";
+        if (txt) {
+          parts.push({ type: "text", text: txt });
+          textPieces.push(txt);
+        }
+      }
+
+      if (images.length === 0) {
+        content = textPieces.join("\n");
+      } else {
+        content = parts;
+      }
+    }
+
     const item: any = {
       role: m.role || "user",
       content,
@@ -747,6 +804,8 @@ function normalizeMessages(messages: any[]): any[] {
     if (m.name) item.name = m.name;
     return item;
   });
+
+  return { normalizedMessages, images };
 }
 
 function cleanParametersSchema(schema: any): any {
