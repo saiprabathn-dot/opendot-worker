@@ -228,7 +228,10 @@ async function handleChatCompletions(body: any, env: Env): Promise<Response> {
   // If tools are provided, run non-streaming to guarantee clean tool call parsing
   if (!stream || (tools && tools.length > 0)) {
     const res = (await env.AI.run(model as any, aiParams)) as any;
-    const content = res?.response || res?.content || "";
+    let content = res?.response || res?.content || "";
+    if (typeof content === "string") {
+      content = content.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+    }
     const toolCalls = res?.tool_calls || [];
 
     const choice: any = {
@@ -657,6 +660,8 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
           }
         }
 
+        const cleanContent = fullContent.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -668,7 +673,7 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
                 type: "message",
                 role: "assistant",
                 status: "completed",
-                content: [{ type: "text", text: fullContent }],
+                content: [{ type: "text", text: cleanContent }],
               },
             })}\n\n`
           )
@@ -689,7 +694,7 @@ async function handleResponses(body: any, env: Env): Promise<Response> {
                     type: "message",
                     role: "assistant",
                     status: "completed",
-                    content: [{ type: "text", text: fullContent }],
+                    content: [{ type: "text", text: cleanContent }],
                   },
                 ],
               },
